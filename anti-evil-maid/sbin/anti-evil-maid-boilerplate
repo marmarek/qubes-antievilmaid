@@ -1,0 +1,61 @@
+LABEL_PREFIX=anti-evil-maid
+AEM_DIR=/var/lib/anti-evil-maid
+TPM_DIR=/var/lib/tpm
+TPMS_DIR=${TPM_DIR}s
+SRK_PASSWORD_CACHE=/run/anti-evil-maid-seal
+
+
+# work with or without plymouth
+
+if command plymouth --ping 2>/dev/null; then
+    alias plymouth_active=true
+    alias message=plymouth_message
+else
+    alias plymouth=:
+    alias plymouth_active=false
+    alias message=log
+fi
+
+
+log() {
+    echo "${0##*/}: $1" >&2
+}
+
+waitfor() {
+    case $# in
+        2) file=$2; what=connected ;;
+        3) file=$3; what=removed ;;
+        *) return 1 ;;
+    esac
+
+    if [ "$@" ]; then
+        return
+    fi
+
+    message "Waiting for $file to be $what..."
+    plymouth pause-progress
+    until [ "$@" ]; do
+        sleep 0.1
+    done
+    plymouth unpause-progress
+    message "$file $what"
+}
+
+synctpms() {
+    label=${1:?}
+    mnt=${2:?}
+
+    message "Syncing to $mnt"
+
+    mnt_tpms_dir=$mnt/anti-evil-maid/${TPMS_DIR##*/}
+    rm -rf "$mnt_tpms_dir"
+
+    ids=$(ls "$TPMS_DIR")
+    for id in $ids; do
+        [ -d "$TPMS_DIR/$id/$label" ] || continue
+
+        mkdir -p "$mnt_tpms_dir/$id"
+        cp -r "$TPMS_DIR/$id/system.data" "$TPMS_DIR/$id/$label" \
+              "$mnt_tpms_dir/$id"
+    done
+}

@@ -1,0 +1,79 @@
+#!/bin/sh -e
+
+alias plymouth_message="plymouth message --text"
+. anti-evil-maid-boilerplate
+
+trap "rm -f $SRK_PASSWORD_CACHE" EXIT
+IDS=$(ls "${TPMS_DIR}")
+LABELS=$(ls "${AEM_DIR}")
+
+
+# get tpm_sealdata arguments
+
+. /etc/anti-evil-maid.conf
+Z=$(tpm_z_srk)
+
+
+for label in $LABELS; do
+    # seal and save secret(s) to root partition
+
+    mkdir -p "$TPM_DIR/$label"
+
+    sealed=0
+    for ext in txt png; do
+         input=$AEM_DIR/$label/secret.$ext
+        output=$TPM_DIR/$label/secret.$ext.sealed
+
+        if [ ! -e "$input" ]; then
+            message "Absent $input"
+        elif cat "$SRK_PASSWORD_CACHE" 2>/dev/null |  # ignored in a tty
+             tpm_sealdata $Z $SEAL -i "$input" -o "$output"; then
+            sealed=$(($sealed + 1))
+            message "Sealed $input using $SEAL"
+        else
+            message "Failed $input"
+        fi
+    done
+
+
+    # already mounted?
+
+    dev=/dev/disk/by-label/$label
+    mnt=/mnt/anti-evil-maid/$label
+
+    if cur_mnt=$(lsblk -dn -o MOUNTPOINT "$dev" 2>/dev/null) &&
+       [ -n "$cur_mnt" ]; then
+        mnt=$cur_mnt
+    else
+        cur_mnt=
+    fi
+
+
+    if [ $sealed -gt 0 ]; then
+        # mount device
+
+        waitfor -b "$dev"
+
+        if [ -z "$cur_mnt" ]; then
+            mkdir -p "$mnt"
+            mount "$dev" "$mnt"
+        fi
+
+
+        # copy secret(s) to device
+
+        synctpms "$label" "$mnt"
+    fi
+
+
+    # unmount device
+
+    if [ -z "$cur_mnt" ]; then
+        if anti-evil-maid-removable "$dev" "$mnt"; then
+            umount "$mnt"
+            waitfor ! -b "$dev"
+        else
+            umount "$mnt"
+        fi
+    fi
+done

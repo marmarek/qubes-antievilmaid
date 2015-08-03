@@ -1,0 +1,110 @@
+#!/bin/sh -e
+
+. anti-evil-maid-boilerplate
+LABEL_SUFFIX_CHARS=0-9a-zA-Z.-
+
+
+usage() {
+    cat <<END
+
+Usage:
+  anti-evil-maid-install [-R ext4|btrfs] [-s <suffix>] <device>
+
+
+Arguments:
+  -s: <device> gets labeled "$LABEL_PREFIX<suffix>". <suffix> can be empty,
+      which is the default, or be composed of these characters: $LABEL_SUFFIX_CHARS
+      Each of your Anti Evil Maid devices must have a unique suffix.
+
+  -R: Replace <device>'s data with a new ext4 or btrfs filesystem!
+
+
+Examples:
+  Install on the internal boot partition (assuming that it is /dev/sda1),
+  and label the current filesystem "anti-evil-maid":
+    anti-evil-maid-install /dev/sda1
+
+  Install on SD card, replacing its data with a new btrfs filesystem,
+  and label the new filesystem "anti-evil-maid.bak":
+    anti-evil-maid-install -R btrfs -s .bak /dev/mmcblk0
+
+END
+
+    exit 1
+}
+
+
+# parse options
+
+LABEL_SUFFIX=
+REPLACE_WITH=
+while getopts s:R:h opt; do
+    case "$opt" in
+        s) LABEL_SUFFIX=$OPTARG ;;
+        R) REPLACE_WITH=$OPTARG ;;
+        *) usage ;;
+    esac
+done
+
+case "$LABEL_SUFFIX" in *[!$LABEL_SUFFIX_CHARS]*) usage; esac
+LABEL=$LABEL_PREFIX$LABEL_SUFFIX
+
+shift $(($OPTIND - 1))
+case $# in
+    1) DEV=$1 ;;
+    *) usage ;;
+esac
+
+
+if [ "$(id -ur)" != 0 ] ; then
+    log "This command must be run as root!"
+    exit 1
+fi
+
+
+# create new filesystem if requested
+
+case "$REPLACE_WITH" in
+      ext4) mkfs.ext4  -F      "$DEV" ;;
+     btrfs) mkfs.btrfs --force "$DEV" ;;
+        ?*) usage ;;
+esac
+
+
+log "Labeling filesystem $LABEL"
+
+fstype="$(blkid -s TYPE -o value "$DEV")"
+case "$fstype" in
+      ext4) e2label "$DEV" "$LABEL" ;;
+     btrfs) btrfs filesystem label "$DEV" "$LABEL" ;;
+         *) log "unknown filesystem type: $fstype"; exit 1 ;;
+esac
+
+
+log "Checking mount status"
+
+MNT=/mnt/anti-evil-maid/$LABEL
+if CUR_MNT=$(lsblk -dn -o MOUNTPOINT "$DEV" 2>/dev/null) &&
+   [ -n "$CUR_MNT" ]; then
+    MNT=$CUR_MNT
+else
+    CUR_MNT=
+
+    log "Mounting at $MNT"
+    mkdir -p "$MNT"
+    mount "$DEV" "$MNT"
+fi
+
+
+mkdir "$MNT/anti-evil-maid"
+synctpms "$LABEL" "$MNT"
+mkdir -p "$AEM_DIR/$LABEL"
+
+
+if [ -z "$CUR_MNT" ]; then
+    log "Unmounting $MNT"
+    umount "$MNT"
+fi
+
+
+log "Done."
